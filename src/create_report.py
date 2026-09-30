@@ -13,6 +13,12 @@ MODEL_COMPARISON_PATH = (
     / "model_comparison.csv"
 )
 
+SIMPLE_RULE_PATH = (
+    PROJECT_ROOT
+    / "reports"
+    / "simple_rule_baseline.csv"
+)
+
 DATABASE_PATH = (
     PROJECT_ROOT
     / "data"
@@ -32,14 +38,19 @@ RISK_BANDS_PATH = (
 
 
 def create_attention_curve():
-    """Compare how efficiently each model uses limited review capacity."""
+    """
+    Compare how efficiently different prioritization strategies
+    use limited human review capacity.
+    """
 
     comparison = pd.read_csv(MODEL_COMPARISON_PATH)
+    simple_rule = pd.read_csv(SIMPLE_RULE_PATH)
 
     capacities = [5, 10, 20, 30]
 
     plt.figure(figsize=(8, 5))
 
+    # Machine-learning models.
     for _, row in comparison.iterrows():
         capture_rates = [
             row["capture_at_5pct"] * 100,
@@ -55,8 +66,26 @@ def create_attention_curve():
             label=row["model"],
         )
 
+    # Simple domain-based rule:
+    # prioritize customers only by previous 90+ day delinquencies.
+    simple_rule_capacities = (
+        simple_rule["capacity"] * 100
+    )
+
+    simple_rule_capture = (
+        simple_rule["capture_rate_mean"] * 100
+    )
+
+    plt.plot(
+        simple_rule_capacities,
+        simple_rule_capture,
+        marker="o",
+        label="90+ Days Late Rule",
+    )
+
     # Random selection baseline:
-    # reviewing 10% of customers would capture about 10% of problem cases.
+    # reviewing x% of customers would capture approximately
+    # x% of problem cases on average.
     plt.plot(
         capacities,
         capacities,
@@ -75,6 +104,7 @@ def create_attention_curve():
     plt.legend()
 
     plt.tight_layout()
+
     plt.savefig(
         ATTENTION_CURVE_PATH,
         dpi=300,
@@ -85,7 +115,10 @@ def create_attention_curve():
 
 
 def create_risk_bands_chart():
-    """Compare predicted and observed risk across review-queue segments."""
+    """
+    Compare predicted and observed risk across
+    review-queue segments.
+    """
 
     query = """
         SELECT
@@ -116,7 +149,6 @@ def create_risk_bands_chart():
         )
 
     x = range(len(risk_bands))
-
     width = 0.35
 
     plt.figure(figsize=(8, 5))

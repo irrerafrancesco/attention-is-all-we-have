@@ -104,7 +104,7 @@ This avoids leaking information from the test set into the model.
 
 ## Models
 
-Two models were compared using the same stratified train/test split:
+Two machine-learning models were compared using the same stratified train/test split:
 
 - **Logistic Regression** as an interpretable baseline;
 - **Histogram Gradient Boosting** as a nonlinear model.
@@ -122,22 +122,55 @@ For this reason, the project focuses on ranking quality, PR-AUC and attention-bu
 
 ---
 
+## Do We Actually Need Machine Learning?
+
+Before assuming that a multivariate model was necessary, the system was compared with a much simpler domain-based rule:
+
+> **Review first the customers with the highest number of previous 90+ day delinquencies.**
+
+The feature used was:
+
+`NumberOfTimes90DaysLate`
+
+Because many customers share the same delinquency count, ties were broken randomly across **100 repetitions**, and the mean capture rate was reported.
+
+This provides a deliberately simple benchmark against which the machine-learning models can be evaluated.
+
+---
+
 ## The Attention Budget
 
-Customers are ranked by predicted probability of serious financial distress.
+Customers are ranked according to each prioritization strategy.
 
 The system then simulates different levels of available human review capacity.
 
 ### Future Problem Cases Captured
 
-| Review Capacity | Logistic Regression | Gradient Boosting |
-|---|---:|---:|
-| 5% | 33.37% | **36.06%** |
-| 10% | 50.72% | **54.76%** |
-| 20% | 65.49% | **73.27%** |
-| 30% | 74.11% | **83.94%** |
+| Review Capacity | Random Review | 90+ Days Late Rule | Logistic Regression | Gradient Boosting |
+|---|---:|---:|---:|---:|
+| 5% | 5.00% | 30.81% | 33.37% | **36.06%** |
+| 10% | 10.00% | 35.65% | 50.72% | **54.76%** |
+| 20% | 20.00% | 42.83% | 65.49% | **73.27%** |
+| 30% | 30.00% | 49.99% | 74.11% | **83.94%** |
 
-The central result is:
+The comparison shows that previous severe delinquency is already a useful signal.
+
+However, as review capacity increases, the simple single-feature rule captures substantially less risk than the multivariate models.
+
+At **20% review capacity**:
+
+- random review would capture approximately **20%** of future problem cases;
+- the 90+ days late rule captures **42.83%**;
+- Logistic Regression captures **65.49%**;
+- Gradient Boosting captures **73.27%**.
+
+This suggests that combining multiple customer characteristics adds meaningful prioritization value beyond obvious prior delinquency history.
+
+---
+
+## Main Result
+
+The central result of the project is:
 
 > **By reviewing only 20% of customers, the Gradient Boosting model concentrated 73.27% of all future serious financial-distress cases inside the review queue.**
 
@@ -149,7 +182,9 @@ For the 30,000-customer test population:
 - capture rate: **73.27%**
 - observed problem rate inside the selected queue: **24.48%**
 
-This converts the model from a prediction tool into a **resource-allocation system**.
+The simple 90+ day delinquency rule captures approximately **42.83%** of future problem cases at the same review capacity.
+
+The comparison therefore tests whether model complexity actually adds value rather than assuming that it does.
 
 ---
 
@@ -174,7 +209,7 @@ The resulting queue is stored as structured data and can be queried by downstrea
 
 ## Risk Bands
 
-The selected queue was divided into risk bands.
+The selected review queue was divided into risk bands.
 
 | Risk Band | Customers | Avg. Predicted Risk | Observed Problem Rate |
 |---|---:|---:|---:|
@@ -183,7 +218,9 @@ The selected queue was divided into risk bands.
 | Medium | 1,024 | 38.70% | 38.96% |
 | Lower | 4,354 | 15.55% | 16.12% |
 
-The close relationship between predicted risk and observed outcomes provides an additional validation that the ranking meaningfully separates different risk levels.
+The observed rates are descriptively close to the average predicted probabilities across these broad segments.
+
+This is useful as a diagnostic, but it should not be interpreted as a formal probability-calibration analysis.
 
 ---
 
@@ -201,7 +238,9 @@ The most influential features were:
 | NumberOfTime60-89DaysPastDueNotWorse | 0.0341 |
 | age | 0.0141 |
 
-The model therefore relies primarily on previous delinquency behaviour and credit utilization when prioritizing customers.
+Previous delinquency behaviour and revolving credit utilization are therefore among the strongest contributors to the model's ranking performance.
+
+The fact that `NumberOfTimes90DaysLate` is the most important feature also motivated the single-feature baseline used to test whether a simpler rule could achieve comparable prioritization performance.
 
 ---
 
@@ -242,7 +281,8 @@ attention-is-all-we-have/
 │   ├── risk_bands.png
 │   ├── feature_importance.png
 │   ├── feature_importance.csv
-│   └── model_comparison.csv
+│   ├── model_comparison.csv
+│   └── simple_rule_baseline.csv
 │
 ├── sql/
 │   └── review_queue.sql
@@ -254,6 +294,7 @@ attention-is-all-we-have/
 │   ├── preprocess.py
 │   ├── baseline_model.py
 │   ├── boosted_model.py
+│   ├── simple_rule_baseline.py
 │   ├── model_comparison.py
 │   ├── review_queue.py
 │   ├── build_database.py
@@ -281,11 +322,13 @@ Data Quality Analysis
        ↓
 Preprocessing
        ↓
-Logistic Regression Baseline
+Simple Domain-Based Rule
+       ↓
+Logistic Regression
        ↓
 Gradient Boosting
        ↓
-Model Comparison
+Strategy Comparison
        ↓
 Risk Ranking
        ↓
@@ -307,6 +350,13 @@ Reporting & Explainability
 ### Attention Efficiency
 
 The attention-efficiency curve compares the percentage of customers reviewed with the percentage of future serious financial-distress cases captured.
+
+It includes:
+
+- random review;
+- a single-feature 90+ day delinquency rule;
+- Logistic Regression;
+- Gradient Boosting.
 
 ![Attention Efficiency Curve](reports/attention_curve.png)
 
@@ -376,11 +426,22 @@ Run preprocessing:
 python src/preprocess.py
 ```
 
-Train and compare the models:
+Train the machine-learning models:
 
 ```bash
 python src/baseline_model.py
 python src/boosted_model.py
+```
+
+Evaluate the simple domain-based baseline:
+
+```bash
+python src/simple_rule_baseline.py
+```
+
+Compare the machine-learning models:
+
+```bash
 python src/model_comparison.py
 ```
 
@@ -408,4 +469,59 @@ python src/explain_model.py
 
 ## Why This Project?
 
-Machine-learning models are often evaluated
+Machine-learning models are often evaluated as if prediction were the final objective.
+
+Real organizations operate under constraints.
+
+Analysts have limited time.
+
+Investigations have a cost.
+
+Not every customer can receive the same level of attention.
+
+**Attention Is All We Have** reframes risk modelling as an allocation problem:
+
+> **How can machine learning help humans focus limited attention where it is most likely to matter?**
+
+The project also asks a second question:
+
+> **Do we actually need a machine-learning model, or would a simple domain rule be enough?**
+
+By comparing random review, a single-feature delinquency rule, Logistic Regression and Gradient Boosting under the same review capacities, the project measures the additional value provided by increasingly sophisticated prioritization strategies.
+
+The model does not replace the analyst.
+
+It helps decide **where the analyst should look first**.
+
+---
+
+## Limitations
+
+This project is a historical machine-learning proof of concept and not a production credit-decision system.
+
+Important limitations include:
+
+- the dataset represents a specific historical lending population;
+- the system should not be used to make real lending decisions;
+- fairness and protected-attribute analysis would be required before any real-world credit application;
+- the review capacity is represented through simplified percentage-based scenarios;
+- the observed target is available only for retrospective validation;
+- operational costs are not explicitly modelled;
+- the models were evaluated on a single held-out test split rather than through a full cross-validation study;
+- hyperparameter tuning was intentionally limited;
+- no formal probability-calibration procedure was performed;
+- a production implementation would require monitoring for data drift, performance drift and changes in review behaviour.
+
+These limitations are intentional boundaries of the current proof of concept rather than claims of production readiness.
+
+---
+
+## Key Takeaway
+
+> **20% of human review capacity captured 73.27% of future serious financial-distress cases.**
+
+A simple delinquency-based rule captured **42.83%** under the same constraint.
+
+When attention is limited, the problem is not only predicting risk.
+
+It is deciding **where to look first — and whether additional model complexity actually helps.**
