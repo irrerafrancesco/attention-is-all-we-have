@@ -1,11 +1,14 @@
-from pathlib import Path
 import math
+from pathlib import Path
 
 import pandas as pd
-from sklearn.model_selection import train_test_split
 
-from baseline_model import prepare_data
-from model_comparison import build_boosted_model
+from baseline_model import (
+    evaluate_review_capacity,
+    prepare_data,
+    split_data,
+)
+from boosted_model import build_boosted_model
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -20,30 +23,38 @@ OUTPUT_PATH = (
 REVIEW_CAPACITY = 0.20
 
 
-def main():
-    # Load the same cleaned feature set used for model evaluation.
-    X, y = prepare_data()
+def build_review_queue(
+    X_test,
+    y_test,
+    probabilities,
+    capacity=REVIEW_CAPACITY,
+):
+    """
+    Build a priority queue from predicted probabilities.
 
-    # Use exactly the same train/test split as the previous experiments.
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.20,
-        random_state=42,
-        stratify=y,
-    )
+    Customers are ranked from highest to lowest predicted risk.
+    Only the number of customers allowed by the review capacity
+    is returned.
+    """
 
-    print("Training Gradient Boosting model...")
+    if len(X_test) != len(y_test):
+        raise ValueError(
+            "X_test and y_test must have the same length."
+        )
 
-    model = build_boosted_model()
-    model.fit(X_train, y_train)
+    if len(X_test) != len(probabilities):
+        raise ValueError(
+            "X_test and probabilities must have the same length."
+        )
 
-    # Estimate the probability of future serious financial distress.
-    probabilities = model.predict_proba(X_test)[:, 1]
+    if not 0 < capacity <= 1:
+        raise ValueError(
+            "Review capacity must be between 0 and 1."
+        )
 
-    # Build a scored population.
     scored_customers = X_test.copy()
 
+    # Preserve a stable identifier derived from the original dataset index.
     scored_customers.insert(
         0,
         "customer_id",
@@ -52,30 +63,64 @@ def main():
 
     scored_customers["predicted_risk"] = probabilities
 
-    # The true outcome is included only because this is a historical
-    # validation dataset. It would not be available in production.
+    # The true outcome is available only because this is historical
+    # validation data. It would not be known in a live scoring setting.
     scored_customers["actual_outcome"] = y_test.values
 
-    # Highest predicted risk receives the highest review priority.
-    scored_customers = scored_customers.sort_values(
-        "predicted_risk",
-        ascending=False,
-    ).reset_index(drop=True)
+    scored_customers = (
+        scored_customers
+        .sort_values(
+            "predicted_risk",
+            ascending=False,
+        )
+        .reset_index(drop=True)
+    )
 
     scored_customers["review_rank"] = (
         scored_customers.index + 1
     )
 
     review_count = math.ceil(
-        len(scored_customers) * REVIEW_CAPACITY
+        len(scored_customers) * capacity
     )
 
-    # Select only the customers that analysts have capacity to review.
-    review_queue = scored_customers.head(
-        review_count
-    ).copy()
+    review_queue = (
+        scored_customers
+        .head(review_count)
+        .copy()
+    )
 
+    # Kept for compatibility with downstream reporting/database steps.
     review_queue["selected_for_review"] = True
+
+    return review_queue
+
+
+def main():
+    X, y = prepare_data()
+
+    X_train, X_test, y_train, y_test = split_data(
+        X,
+        y,
+    )
+
+    print("Training Gradient Boosting model...")
+
+    model = build_boosted_model()
+
+    model.fit(
+        X_train,
+        y_train,
+    )
+
+    probabilities = model.predict_proba(X_test)[:, 1]
+
+    review_queue = build_review_queue(
+        X_test=X_test,
+        y_test=y_test,
+        probabilities=probabilities,
+        capacity=REVIEW_CAPACITY,
+    )
 
     OUTPUT_PATH.parent.mkdir(
         parents=True,
@@ -87,20 +132,20 @@ def main():
         index=False,
     )
 
-    total_problem_cases = y_test.sum()
+    (
+        _capacity,
+        review_count,
+        captured_problem_cases,
+        capture_rate,
+        queue_precision,
+    ) = evaluate_review_capacity(
+        y_test,
+        probabilities,
+        capacities=[REVIEW_CAPACITY],
+    )[0]
 
-    captured_problem_cases = (
-        review_queue["actual_outcome"].sum()
-    )
-
-    capture_rate = (
-        captured_problem_cases
-        / total_problem_cases
-    )
-
-    queue_risk = (
-        captured_problem_cases
-        / len(review_queue)
+    total_problem_cases = int(
+        y_test.sum()
     )
 
     print("\nREVIEW QUEUE")
@@ -111,15 +156,16 @@ def main():
     print(f"Available reviews:      {review_count:,}")
 
     print(
-        f"Problem cases captured: "
+        "Problem cases captured: "
         f"{captured_problem_cases:,} / "
         f"{total_problem_cases:,}"
     )
 
     print(f"Capture rate:           {capture_rate:.2%}")
-    print(f"Risk inside queue:      {queue_risk:.2%}")
+    print(f"Queue precision:        {queue_precision:.2%}")
 
     print("\nTop 10 priority customers:")
+
     print(
         review_queue[
             [
@@ -133,8 +179,7 @@ def main():
         .to_string(index=False)
     )
 
-    print(f"\nQueue saved to:")
-    print(OUTPUT_PATH)
+    print(f"\nQueue saved to:\n{OUTPUT_PATH}")
 
 
 if __name__ == "__main__":
