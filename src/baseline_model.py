@@ -1,7 +1,5 @@
 import math
 
-import numpy as np
-from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
@@ -13,28 +11,32 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from data_loader import load_training_data
+from preprocess import preprocess_data
 
 
 TARGET = "SeriousDlqin2yrs"
 
-DELINQUENCY_COLUMNS = [
-    "NumberOfTime30-59DaysPastDueNotWorse",
-    "NumberOfTimes90DaysLate",
-    "NumberOfTime60-89DaysPastDueNotWorse",
-]
+RANDOM_STATE = 42
+TEST_SIZE = 0.20
+
+REVIEW_CAPACITIES = (
+    0.05,
+    0.10,
+    0.20,
+    0.30,
+)
 
 
 def prepare_data():
-    """Prepare features and target without leaking test information."""
+    """
+    Load and structurally clean the dataset.
 
-    df = load_training_data().copy()
+    Missing values are intentionally preserved here because statistical
+    imputation is performed inside the modelling pipeline.
+    """
 
-    # Remove the single impossible age value.
-    df = df[df["age"] > 0].copy()
-
-    # Convert anomalous delinquency codes into missing values.
-    for column in DELINQUENCY_COLUMNS:
-        df.loc[df[column] >= 90, column] = np.nan
+    df = load_training_data()
+    df = preprocess_data(df)
 
     X = df.drop(columns=TARGET)
     y = df[TARGET]
@@ -42,32 +44,107 @@ def prepare_data():
     return X, y
 
 
-def evaluate_review_capacity(y_true, probabilities, capacities):
+def split_data(X, y):
+    """Create a reproducible stratified train/test split."""
+
+    return train_test_split(
+        X,
+        y,
+        test_size=TEST_SIZE,
+        random_state=RANDOM_STATE,
+        stratify=y,
+    )
+
+
+def build_logistic_model():
     """
-    Measure how many future problem cases are captured when analysts
-    can review only a limited percentage of customers.
+    Build the Logistic Regression baseline.
+
+    Imputation and scaling are fitted only on the training data,
+    preventing information leakage from the test set.
     """
 
-    results = []
+    return Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(strategy="median"),
+            ),
+            (
+                "scaler",
+                StandardScaler(),
+            ),
+            (
+                "classifier",
+                LogisticRegression(
+                    max_iter=1000,
+                    random_state=RANDOM_STATE,
+                ),
+            ),
+        ]
+    )
+
+
+def evaluate_review_capacity(
+    y_true,
+    probabilities,
+    capacities,
+):
+    """
+    Evaluate how many future problem cases are captured when only a
+    limited percentage of customers can be reviewed.
+
+    Customers are ranked from highest to lowest predicted probability.
+    """
+
+    if len(y_true) != len(probabilities):
+        raise ValueError(
+            "y_true and probabilities must have the same length."
+        )
 
     ranked = (
         y_true
         .to_frame("actual")
         .assign(probability=probabilities)
-        .sort_values("probability", ascending=False)
+        .sort_values(
+            "probability",
+            ascending=False,
+        )
     )
 
-    total_problem_cases = ranked["actual"].sum()
+    total_problem_cases = int(ranked["actual"].sum())
+
+    if total_problem_cases == 0:
+        raise ValueError(
+            "Review-capacity evaluation requires at least one positive case."
+        )
+
+    results = []
 
     for capacity in capacities:
-        review_count = math.ceil(len(ranked) * capacity)
+
+        if not 0 < capacity <= 1:
+            raise ValueError(
+                "Each review capacity must be between 0 and 1."
+            )
+
+        review_count = math.ceil(
+            len(ranked) * capacity
+        )
 
         review_queue = ranked.head(review_count)
 
-        captured_cases = review_queue["actual"].sum()
+        captured_cases = int(
+            review_queue["actual"].sum()
+        )
 
-        capture_rate = captured_cases / total_problem_cases
-        queue_precision = captured_cases / review_count
+        capture_rate = (
+            captured_cases / total_problem_cases
+        )
+
+        queue_precision = (
+            captured_cases / review_count
+        )
 
         results.append(
             (
@@ -85,52 +162,31 @@ def evaluate_review_capacity(y_true, probabilities, capacities):
 def main():
     X, y = prepare_data()
 
-    X_train, X_test, y_train, y_test = train_test_split(
+    X_train, X_test, y_train, y_test = split_data(
         X,
         y,
-        test_size=0.20,
-        random_state=42,
-        stratify=y,
     )
 
-    numeric_features = X.columns.tolist()
-
-    preprocessing = ColumnTransformer(
-        transformers=[
-            (
-                "numeric",
-                Pipeline(
-                    steps=[
-                        ("imputer", SimpleImputer(strategy="median")),
-                        ("scaler", StandardScaler()),
-                    ]
-                ),
-                numeric_features,
-            )
-        ]
-    )
-
-    model = Pipeline(
-        steps=[
-            ("preprocessing", preprocessing),
-            (
-                "classifier",
-                LogisticRegression(
-                    max_iter=1000,
-                    random_state=42,
-                ),
-            ),
-        ]
-    )
+    model = build_logistic_model()
 
     print("Training Logistic Regression baseline...")
 
-    model.fit(X_train, y_train)
+    model.fit(
+        X_train,
+        y_train,
+    )
 
     probabilities = model.predict_proba(X_test)[:, 1]
 
-    roc_auc = roc_auc_score(y_test, probabilities)
-    pr_auc = average_precision_score(y_test, probabilities)
+    roc_auc = roc_auc_score(
+        y_test,
+        probabilities,
+    )
+
+    pr_auc = average_precision_score(
+        y_test,
+        probabilities,
+    )
 
     print("\nBASELINE MODEL")
     print("=" * 60)
@@ -147,7 +203,7 @@ def main():
     results = evaluate_review_capacity(
         y_test,
         probabilities,
-        capacities=[0.05, 0.10, 0.20, 0.30],
+        capacities=REVIEW_CAPACITIES,
     )
 
     print(
@@ -155,7 +211,7 @@ def main():
         f"{'Reviews':>10}"
         f"{'Problems':>12}"
         f"{'Captured':>12}"
-        f"{'Queue risk':>12}"
+        f"{'Precision':>12}"
     )
 
     print("-" * 58)
