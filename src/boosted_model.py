@@ -4,27 +4,26 @@ from sklearn.metrics import (
     average_precision_score,
     roc_auc_score,
 )
-from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 
 from baseline_model import (
+    RANDOM_STATE,
+    REVIEW_CAPACITIES,
     evaluate_review_capacity,
     prepare_data,
+    split_data,
 )
 
 
-def main():
-    X, y = prepare_data()
+def build_boosted_model():
+    """
+    Build the Gradient Boosting model.
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.20,
-        random_state=42,
-        stratify=y,
-    )
+    Median imputation is kept inside the pipeline so that missing-value
+    statistics are learned only from the training data.
+    """
 
-    model = Pipeline(
+    return Pipeline(
         steps=[
             (
                 "imputer",
@@ -36,20 +35,41 @@ def main():
                     learning_rate=0.08,
                     max_iter=200,
                     max_leaf_nodes=31,
-                    random_state=42,
+                    random_state=RANDOM_STATE,
                 ),
             ),
         ]
     )
 
+
+def main():
+    X, y = prepare_data()
+
+    X_train, X_test, y_train, y_test = split_data(
+        X,
+        y,
+    )
+
+    model = build_boosted_model()
+
     print("Training Gradient Boosting model...")
 
-    model.fit(X_train, y_train)
+    model.fit(
+        X_train,
+        y_train,
+    )
 
     probabilities = model.predict_proba(X_test)[:, 1]
 
-    roc_auc = roc_auc_score(y_test, probabilities)
-    pr_auc = average_precision_score(y_test, probabilities)
+    roc_auc = roc_auc_score(
+        y_test,
+        probabilities,
+    )
+
+    pr_auc = average_precision_score(
+        y_test,
+        probabilities,
+    )
 
     print("\nBOOSTED MODEL")
     print("=" * 60)
@@ -66,7 +86,7 @@ def main():
     results = evaluate_review_capacity(
         y_test,
         probabilities,
-        capacities=[0.05, 0.10, 0.20, 0.30],
+        capacities=REVIEW_CAPACITIES,
     )
 
     print(
@@ -74,7 +94,7 @@ def main():
         f"{'Reviews':>10}"
         f"{'Problems':>12}"
         f"{'Captured':>12}"
-        f"{'Queue risk':>12}"
+        f"{'Precision':>12}"
     )
 
     print("-" * 58)
