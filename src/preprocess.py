@@ -21,28 +21,29 @@ DELINQUENCY_COLUMNS = [
     "NumberOfTime60-89DaysPastDueNotWorse",
 ]
 
+DELINQUENCY_SENTINELS = [96, 98]
+
 
 def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean the raw training dataset."""
+    """
+    Apply structural cleaning to the raw training dataset.
+
+    Statistical imputation is intentionally not performed here.
+    Missing values are handled inside the modelling pipelines to
+    prevent information leakage from the test set.
+    """
 
     df = df.copy()
 
-    # Remove impossible age values.
-    df = df[df["age"] > 0].copy()
+    # Remove observations with impossible age values.
+    df = df.loc[df["age"] > 0].copy()
 
-    # Replace sentinel delinquency values with missing values.
+    # Treat anomalous delinquency codes as missing values.
     for column in DELINQUENCY_COLUMNS:
-        df.loc[df[column] >= 90, column] = np.nan
-
-    # Median imputation for missing values.
-    median_columns = [
-        "MonthlyIncome",
-        "NumberOfDependents",
-        *DELINQUENCY_COLUMNS,
-    ]
-
-    for column in median_columns:
-        df[column] = df[column].fillna(df[column].median())
+        df.loc[
+            df[column].isin(DELINQUENCY_SENTINELS),
+            column,
+        ] = np.nan
 
     return df
 
@@ -61,17 +62,20 @@ def main() -> None:
         index=False,
     )
 
-    print("Preprocessing completed.")
+    print("Structural preprocessing completed.")
     print("=" * 60)
 
     print(f"Rows before: {len(df):,}")
     print(f"Rows after:  {len(cleaned_df):,}")
 
-    print("\nMissing values after preprocessing:")
-    print(cleaned_df.isna().sum())
+    print("\nMissing values after structural cleaning:")
+    missing_values = cleaned_df.isna().sum()
+    print(missing_values[missing_values > 0])
 
-    print(f"\nSaved to:")
-    print(PROCESSED_DATA_PATH)
+    print("\nNo statistical imputation was performed.")
+    print("Missing values will be handled inside the modelling pipelines.")
+
+    print(f"\nSaved to:\n{PROCESSED_DATA_PATH}")
 
 
 if __name__ == "__main__":
