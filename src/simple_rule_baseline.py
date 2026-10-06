@@ -1,38 +1,83 @@
+import math
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 
-from baseline_model import prepare_data
+from baseline_model import (
+    RANDOM_STATE,
+    REVIEW_CAPACITIES,
+    prepare_data,
+    split_data,
+)
 
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+REPORT_PATH = (
+    PROJECT_ROOT
+    / "reports"
+    / "simple_rule_baseline.csv"
+)
 
 FEATURE = "NumberOfTimes90DaysLate"
-CAPACITIES = [0.05, 0.10, 0.20, 0.30]
-RANDOM_STATE = 42
 N_REPEATS = 100
 
 
-def evaluate_simple_rule(y_true, scores, capacities, n_repeats=100):
+def evaluate_simple_rule(
+    y_true,
+    scores,
+    capacities,
+    n_repeats=N_REPEATS,
+):
     """
     Evaluate a simple ranking rule based on a single feature.
 
-    Because many customers have the same delinquency count, ties are broken
-    randomly several times. We report the average capture rate across repeats.
+    Many customers share the same delinquency count, so ties are broken
+    randomly across multiple repetitions. The reported capture rate is
+    therefore the average across repeated random tie-breaks.
     """
+
     y_true = np.asarray(y_true)
     scores = np.asarray(scores)
 
-    total_positive_cases = y_true.sum()
+    if len(y_true) != len(scores):
+        raise ValueError(
+            "y_true and scores must have the same length."
+        )
+
+    if n_repeats <= 0:
+        raise ValueError(
+            "n_repeats must be greater than zero."
+        )
+
+    total_positive_cases = int(y_true.sum())
+
+    if total_positive_cases == 0:
+        raise ValueError(
+            "Simple-rule evaluation requires at least one positive case."
+        )
 
     results = []
 
     for capacity in capacities:
-        review_count = int(len(y_true) * capacity)
+
+        if not 0 < capacity <= 1:
+            raise ValueError(
+                "Each review capacity must be between 0 and 1."
+            )
+
+        review_count = math.ceil(
+            len(y_true) * capacity
+        )
+
         capture_rates = []
 
         for repeat in range(n_repeats):
-            rng = np.random.default_rng(RANDOM_STATE + repeat)
+
+            rng = np.random.default_rng(
+                RANDOM_STATE + repeat
+            )
 
             evaluation = pd.DataFrame(
                 {
@@ -43,23 +88,43 @@ def evaluate_simple_rule(y_true, scores, capacities, n_repeats=100):
             )
 
             evaluation = evaluation.sort_values(
-                by=["score", "tie_breaker"],
-                ascending=[False, False],
+                by=[
+                    "score",
+                    "tie_breaker",
+                ],
+                ascending=[
+                    False,
+                    False,
+                ],
             )
 
-            selected = evaluation.head(review_count)
+            selected = evaluation.head(
+                review_count
+            )
 
-            captured_cases = selected["target"].sum()
-            capture_rate = captured_cases / total_positive_cases
+            captured_cases = int(
+                selected["target"].sum()
+            )
 
-            capture_rates.append(capture_rate)
+            capture_rate = (
+                captured_cases
+                / total_positive_cases
+            )
+
+            capture_rates.append(
+                capture_rate
+            )
 
         results.append(
             {
                 "capacity": capacity,
                 "review_count": review_count,
-                "capture_rate_mean": np.mean(capture_rates),
-                "capture_rate_std": np.std(capture_rates),
+                "capture_rate_mean": np.mean(
+                    capture_rates
+                ),
+                "capture_rate_std": np.std(
+                    capture_rates
+                ),
             }
         )
 
@@ -69,34 +134,46 @@ def evaluate_simple_rule(y_true, scores, capacities, n_repeats=100):
 def main():
     X, y = prepare_data()
 
-    X_train, X_test, y_train, y_test = train_test_split(
+    X_train, X_test, y_train, y_test = split_data(
         X,
         y,
-        test_size=0.20,
-        random_state=RANDOM_STATE,
-        stratify=y,
     )
 
-    # Median calculated only from the training set to avoid data leakage.
-    training_median = X_train[FEATURE].median()
+    # Estimate the imputation value using training data only.
+    training_median = X_train[
+        FEATURE
+    ].median()
 
-    simple_rule_scores = X_test[FEATURE].fillna(training_median)
+    simple_rule_scores = X_test[
+        FEATURE
+    ].fillna(
+        training_median
+    )
 
     results = evaluate_simple_rule(
         y_true=y_test,
         scores=simple_rule_scores,
-        capacities=CAPACITIES,
+        capacities=REVIEW_CAPACITIES,
         n_repeats=N_REPEATS,
     )
 
     print("\nSIMPLE RULE BASELINE")
+    print("=" * 60)
+
     print(f"Ranking feature: {FEATURE}")
-    print(f"Training-set median used for missing values: {training_median}")
-    print(f"Random tie-breaking repetitions: {N_REPEATS}")
+    print(
+        "Training-set median used for missing values: "
+        f"{training_median}"
+    )
+    print(
+        f"Random tie-breaking repetitions: {N_REPEATS}"
+    )
 
     print("\nATTENTION BUDGET RESULTS")
+    print("=" * 60)
 
     for _, row in results.iterrows():
+
         print(
             f"{row['capacity']:.0%} review capacity | "
             f"{int(row['review_count']):,} reviews | "
@@ -104,10 +181,17 @@ def main():
             f"(± {row['capture_rate_std']:.2%})"
         )
 
-    output_path = Path("reports/simple_rule_baseline.csv")
-    results.to_csv(output_path, index=False)
+    REPORT_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    print(f"\nResults saved to: {output_path}")
+    results.to_csv(
+        REPORT_PATH,
+        index=False,
+    )
+
+    print(f"\nResults saved to:\n{REPORT_PATH}")
 
 
 if __name__ == "__main__":
