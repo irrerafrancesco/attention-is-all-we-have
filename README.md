@@ -7,6 +7,12 @@
 
 ---
 
+## Result at a glance
+
+**Reviewing the highest-ranked 20% of 30,000 test customers captures 72.97% of the future serious-distress cases** (1,463 of 2,005), versus 42.83% for a simple delinquency-count rule. Results were reproduced on the original Kaggle training data; see [validation details](VERIFICATION.md).
+
+![Attention efficiency curve](reports/attention_curve.png)
+
 ## Overview
 
 Most credit-risk projects focus on a standard machine-learning question:
@@ -111,10 +117,12 @@ Two machine-learning models were compared using the same stratified train/test s
 
 ### Predictive Performance
 
+Metrics below were reproduced using the dependency versions documented in [VERIFICATION.md](VERIFICATION.md). Different scikit-learn versions can lead to slightly different histogram-boosting results.
+
 | Model | ROC-AUC | PR-AUC |
 |---|---:|---:|
 | Logistic Regression | 0.8145 | 0.3465 |
-| Gradient Boosting | **0.8682** | **0.3979** |
+| Gradient Boosting | **0.8682** | **0.3974** |
 
 Because the positive class represents only 6.68% of customers, accuracy alone would be misleading.
 
@@ -148,10 +156,10 @@ The system then simulates different levels of available human review capacity.
 
 | Review Capacity | Random Review | 90+ Days Late Rule | Logistic Regression | Gradient Boosting |
 |---|---:|---:|---:|---:|
-| 5% | 5.00% | 30.81% | 33.37% | **36.06%** |
-| 10% | 10.00% | 35.65% | 50.72% | **54.76%** |
-| 20% | 20.00% | 42.83% | 65.49% | **73.27%** |
-| 30% | 30.00% | 49.99% | 74.11% | **83.94%** |
+| 5% | 5.00% | 30.81% | 33.37% | **35.86%** |
+| 10% | 10.00% | 35.65% | 50.72% | **55.16%** |
+| 20% | 20.00% | 42.83% | 65.49% | **72.97%** |
+| 30% | 30.00% | 49.99% | 74.11% | **83.79%** |
 
 The comparison shows that previous severe delinquency is already a useful signal.
 
@@ -162,7 +170,7 @@ At **20% review capacity**:
 - random review would capture approximately **20%** of future problem cases;
 - the 90+ days late rule captures **42.83%**;
 - Logistic Regression captures **65.49%**;
-- Gradient Boosting captures **73.27%**.
+- Gradient Boosting captures **72.97%**.
 
 This suggests that combining multiple customer characteristics adds meaningful prioritization value beyond obvious prior delinquency history.
 
@@ -172,15 +180,15 @@ This suggests that combining multiple customer characteristics adds meaningful p
 
 The central result of the project is:
 
-> **By reviewing only 20% of customers, the Gradient Boosting model concentrated 73.27% of all future serious financial-distress cases inside the review queue.**
+> **By reviewing only 20% of customers, the Gradient Boosting model concentrated 72.97% of all future serious financial-distress cases inside the review queue.**
 
 For the 30,000-customer test population:
 
 - total future problem cases: **2,005**
 - available reviews at 20% capacity: **6,000**
-- problem cases captured: **1,469**
-- capture rate: **73.27%**
-- observed problem rate inside the selected queue: **24.48%**
+- problem cases captured: **1,463**
+- capture rate: **72.97%**
+- observed problem rate inside the selected queue: **24.38%**
 
 The simple 90+ day delinquency rule captures approximately **42.83%** of future problem cases at the same review capacity.
 
@@ -213,10 +221,10 @@ The selected review queue was divided into risk bands.
 
 | Risk Band | Customers | Avg. Predicted Risk | Observed Problem Rate |
 |---|---:|---:|---:|
-| Very High | 81 | 74.45% | 70.37% |
-| High | 541 | 58.78% | 57.49% |
-| Medium | 1,024 | 38.70% | 38.96% |
-| Lower | 4,354 | 15.55% | 16.12% |
+| Very High | 100 | 74.70% | 69.00% |
+| High | 526 | 58.56% | 55.70% |
+| Medium | 1,043 | 38.55% | 39.79% |
+| Lower | 4,331 | 15.43% | 15.84% |
 
 The observed rates are descriptively close to the average predicted probabilities across these broad segments.
 
@@ -232,15 +240,15 @@ The most influential features were:
 
 | Feature | Permutation Importance |
 |---|---:|
-| NumberOfTimes90DaysLate | 0.0993 |
-| RevolvingUtilizationOfUnsecuredLines | 0.0791 |
-| NumberOfTime30-59DaysPastDueNotWorse | 0.0393 |
-| NumberOfTime60-89DaysPastDueNotWorse | 0.0341 |
-| age | 0.0141 |
+| NumberOfTimes90DaysLate | 0.0974 |
+| RevolvingUtilizationOfUnsecuredLines | 0.0786 |
+| NumberOfTime30-59DaysPastDueNotWorse | 0.0372 |
+| NumberOfTime60-89DaysPastDueNotWorse | 0.0339 |
+| age | 0.0139 |
 
 Previous delinquency behaviour and revolving credit utilization are therefore among the strongest contributors to the model's ranking performance.
 
-The fact that `NumberOfTimes90DaysLate` is the most important feature also motivated the single-feature baseline used to test whether a simpler rule could achieve comparable prioritization performance.
+The single-feature baseline was motivated independently by domain knowledge: previous severe delinquency is an intuitive, transparent ranking rule. Permutation importance was calculated subsequently as a diagnostic; test-set importance was not used to select the baseline.
 
 ---
 
@@ -300,9 +308,14 @@ attention-is-all-we-have/
 │   ├── build_database.py
 │   ├── query_database.py
 │   ├── create_report.py
-│   └── explain_model.py
+│   ├── explain_model.py
+│   └── run_pipeline.py
 │
+├── tests/
+│   └── test_core.py
 ├── .gitignore
+├── VERIFICATION.md
+├── requirements-dev.txt
 ├── requirements.txt
 └── README.md
 ```
@@ -412,6 +425,21 @@ The data directory is excluded from Git.
 
 ## Running the Project
 
+From the repository root (after setting up the dataset and environment), run the **full pipeline** in one command:
+
+```bash
+python src/run_pipeline.py
+```
+
+To run the unit tests:
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+Alternatively, execute the stages individually:
+
 Run the data inspection stages:
 
 ```bash
@@ -518,7 +546,7 @@ These limitations are intentional boundaries of the current proof of concept rat
 
 ## Key Takeaway
 
-> **20% of human review capacity captured 73.27% of future serious financial-distress cases.**
+> **20% of human review capacity captured 72.97% of future serious financial-distress cases.**
 
 A simple delinquency-based rule captured **42.83%** under the same constraint.
 
