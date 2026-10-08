@@ -1,5 +1,6 @@
 from pathlib import Path
 import sqlite3
+from contextlib import closing
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -36,6 +37,107 @@ RISK_BANDS_PATH = (
     REPORTS_DIR / "risk_bands.png"
 )
 
+MODEL_COMPARISON_REQUIRED_COLUMNS = {
+    "model",
+    "capture_at_5pct",
+    "capture_at_10pct",
+    "capture_at_20pct",
+    "capture_at_30pct",
+}
+
+SIMPLE_RULE_REQUIRED_COLUMNS = {
+    "capacity",
+    "capture_rate_mean",
+}
+
+RISK_BANDS_REQUIRED_COLUMNS = {
+    "risk_band",
+    "predicted_risk_pct",
+    "observed_problem_rate_pct",
+}
+
+
+def load_csv_report(path, required_columns):
+    """Load a CSV report and validate its structure."""
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Required report not found: {path}"
+        )
+
+    df = pd.read_csv(path)
+
+    if df.empty:
+        raise ValueError(f"Report is empty: {path}")
+
+    missing_columns = required_columns - set(df.columns)
+
+    if missing_columns:
+        raise ValueError(
+            f"Missing columns in {path.name}: {sorted(missing_columns)}"
+        )
+
+    return df
+
+
+def load_risk_bands():
+    """
+    Query predicted and observed outcomes across
+    review-queue risk bands.
+    """
+
+    if not DATABASE_PATH.is_file():
+        raise FileNotFoundError(
+            f"Database not found: {DATABASE_PATH}\n"
+            "Run build_database.py first."
+        )
+
+    query = """
+        SELECT
+            CASE
+                WHEN predicted_risk >= 0.70 THEN 'Very High'
+                WHEN predicted_risk >= 0.50 THEN 'High'
+                WHEN predicted_risk >= 0.30 THEN 'Medium'
+                ELSE 'Lower'
+            END AS risk_band,
+
+            AVG(predicted_risk) * 100
+                AS predicted_risk_pct,
+
+            100.0 * SUM(actual_outcome) / COUNT(*)
+                AS observed_problem_rate_pct
+
+        FROM review_queue
+
+        GROUP BY risk_band
+
+        ORDER BY AVG(predicted_risk)
+    """
+
+    with closing(sqlite3.connect(DATABASE_PATH)) as connection:
+        risk_bands = pd.read_sql_query(
+            query,
+            connection,
+        )
+
+    if risk_bands.empty:
+        raise ValueError(
+            "The risk-band query returned no rows."
+        )
+
+    missing_columns = (
+        RISK_BANDS_REQUIRED_COLUMNS
+        - set(risk_bands.columns)
+    )
+
+    if missing_columns:
+        raise ValueError(
+            "Risk-band query is missing columns: "
+            f"{sorted(missing_columns)}"
+        )
+
+    return risk_bands
+
 
 def create_attention_curve():
     """
@@ -43,8 +145,15 @@ def create_attention_curve():
     use limited human review capacity.
     """
 
-    comparison = pd.read_csv(MODEL_COMPARISON_PATH)
-    simple_rule = pd.read_csv(SIMPLE_RULE_PATH)
+    comparison = load_csv_report(
+        MODEL_COMPARISON_PATH,
+        MODEL_COMPARISON_REQUIRED_COLUMNS,
+    )
+
+    simple_rule = load_csv_report(
+        SIMPLE_RULE_PATH,
+        SIMPLE_RULE_REQUIRED_COLUMNS,
+    )
 
     capacities = [5, 10, 20, 30]
 
@@ -85,7 +194,7 @@ def create_attention_curve():
 
     # Random selection baseline:
     # reviewing x% of customers would capture approximately
-    # x% of problem cases on average.
+    # x% of future problem cases on average.
     plt.plot(
         capacities,
         capacities,
@@ -102,7 +211,6 @@ def create_attention_curve():
 
     plt.grid(alpha=0.3)
     plt.legend()
-
     plt.tight_layout()
 
     plt.savefig(
@@ -116,37 +224,13 @@ def create_attention_curve():
 
 def create_risk_bands_chart():
     """
-    Compare predicted and observed risk across
+    Compare predicted risk and observed outcomes across
     review-queue segments.
+
+    This is a diagnostic comparison, not a formal calibration analysis.
     """
 
-    query = """
-        SELECT
-            CASE
-                WHEN predicted_risk >= 0.70 THEN 'Very High'
-                WHEN predicted_risk >= 0.50 THEN 'High'
-                WHEN predicted_risk >= 0.30 THEN 'Medium'
-                ELSE 'Lower'
-            END AS risk_band,
-
-            AVG(predicted_risk) * 100
-                AS predicted_risk_pct,
-
-            100.0 * SUM(actual_outcome) / COUNT(*)
-                AS observed_problem_rate_pct
-
-        FROM review_queue
-
-        GROUP BY risk_band
-
-        ORDER BY AVG(predicted_risk)
-    """
-
-    with sqlite3.connect(DATABASE_PATH) as connection:
-        risk_bands = pd.read_sql_query(
-            query,
-            connection,
-        )
+    risk_bands = load_risk_bands()
 
     x = range(len(risk_bands))
     width = 0.35
